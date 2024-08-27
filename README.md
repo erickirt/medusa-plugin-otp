@@ -116,7 +116,9 @@ In this example, we're going to override the current authentication system for t
   <li>Create a new route to verify and authenticate the Customer</li>
 </ol>
 
-<h3>1. Extending the Customer model</h3>
+<h3>1. Extending the Customer model, service and type</h3>
+
+<h4>1.1. Extending the Customer model</h4>
 
 <p>
 First, we need to extend the Customer model to add a new field called <code>otp_secret</code>.
@@ -139,8 +141,55 @@ export class Customer extends MedusaCustomer {
 > otp_secret: string
 > ```
 
+<h4>1.2. Extending the Customer service</h4>
 
-**Don't forget to create the migration for this model and add the module augmentation for the Customer type :**
+<p>
+We then need to extend the Customer service to make sure the <code>update</code> function will not throw a TypeScript error with the new <code>otp_secret</code> field.
+</p>
+
+```ts
+// src/services/customer.ts
+
+import {
+	Customer,
+	CustomerService as MedusaCustomerService,
+} from '@medusajs/medusa'
+// We alias the UpdateCustomerInput type to avoid name conflicts
+import { UpdateCustomerInput as MedusaUpdateCustomerInput } from '@medusajs/medusa/dist/types/customers'
+import { Lifetime } from 'awilix'
+
+// 1. Extend the UpdateCustomerInput type to include the otp_secret field
+type UpdateCustomerInput = MedusaUpdateCustomerInput & {
+	otp_secret?: string
+}
+
+class CustomerService extends MedusaCustomerService {
+	static LIFE_TIME = Lifetime.SCOPED
+
+	constructor() {
+		// @ts-ignore
+		super(...arguments)
+	}
+
+  // 2. Override the update method to use the new `UpdateCustomerInput` type that includes the `otp_secret` field
+	async update(
+		customerId: string,
+		update: UpdateCustomerInput,
+	): Promise<Customer> {
+		return await super.update(customerId, update)
+	}
+}
+
+export default CustomerService
+```
+
+> Don't hesitate to extend other functions you need in the same way by just returning the super function with the extended parameters.
+
+<h4>1.3. Creating the migration</h4>
+<p>
+ Don't forget to create the migration for this model to add the <code>otp_secret</code> field to the <code>customers</code> table.
+</p>
+
 
 ```ts
 import { MigrationInterface, QueryRunner } from 'typeorm'
@@ -156,7 +205,11 @@ export class AddOtpSecretToCustomer1719843922955 implements MigrationInterface {
 }
 ```
 
-**Module augmentation**
+<h4>1.4. Module augmentation</h4>
+<p>
+Finally, we need to tell TypeScript that the <code>Customer</code> model has a new field called <code>otp_secret</code>.
+</p>
+
 ```ts
 // src/index.d.ts
 
@@ -167,8 +220,7 @@ declare module '@medusajs/medusa/dist/models/customer' {
 }
 ```
 
-> The module augmentation is necessary to tell TypeScript that the Customer model has a new field called <code>otp_secret</code>.
-> Which will allows you to get the `otp_secret` field everywhere the `Customer` type is used.
+> This will allows you to get the `otp_secret` field everywhere the `Customer` type is used.
 
 
 <h3>2. Generating a secret</h3>
@@ -181,8 +233,10 @@ When a new Customer is created, we need to generate a random secret and save it 
 ```ts
 // src/subscribers/customer-created.ts
 
-import type { Logger, SubscriberArgs, SubscriberConfig, CustomerService } from '@medusajs/medusa'
+import type { Logger, SubscriberArgs, SubscriberConfig } from '@medusajs/medusa'
 import type { TOTPService } from '@perseidesjs/medusa-plugin-otp'
+
+import type { CustomerService } from '../services/customer'
 
 type CustomerCreatedEventData = {
 	id: string // Customer ID
@@ -235,7 +289,6 @@ import {
 	StorePostAuthReq,
 	defaultStoreCustomersFields,
 	validator,
-  type CustomerService,
 	type AuthService,
 	type MedusaRequest,
 	type MedusaResponse,
@@ -244,6 +297,7 @@ import { defaultRelations } from '@medusajs/medusa/dist/api/routes/store/auth'
 import type { TOTPService } from '@perseidesjs/medusa-plugin-otp'
 import type { EntityManager } from 'typeorm'
 
+import type { CustomerService } from '../../../services/customer'
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
 	const validated = await validator(StorePostAuthReq, req.body)
 
@@ -284,8 +338,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
 ```ts
 // src/subscribers/otp-generated.ts
-import type { Logger, SubscriberArgs, SubscriberConfig, CustomerService } from "@medusajs/medusa";
+import type { Logger, SubscriberArgs, SubscriberConfig } from "@medusajs/medusa";
 import type { TOTPService } from "@perseidesjs/medusa-plugin-otp";
+
+import type { CustomerService } from '../services/customer'
 
 type OTPGeneratedEventData = {
     key: string // Customer ID
@@ -330,10 +386,12 @@ We're now going to create a new route to verify the OTP, this route will be call
 ```ts
 // src/api/store/auth/otp/route.ts
 
-import { validator, type MedusaRequest, type MedusaResponse, type CustomerService } from "@medusajs/medusa";
+import { validator, type MedusaRequest, type MedusaResponse } from "@medusajs/medusa";
 import { IsEmail, IsString, MaxLength, MinLength } from "class-validator";
 
 import type { TOTPService } from "@perseidesjs/medusa-plugin-otp";
+
+import type { CustomerService } from '../../../services/customer'
 
 export async function POST(
   req: MedusaRequest,
