@@ -22,7 +22,7 @@
 </h4>
 
 <p align="center">
- A Medusa's plugin for implementing OTP.
+ A Medusa's plugin for implementing OTP on Medusa v1.x.x
 </p>
 
 <h2>
@@ -72,6 +72,8 @@ const plugins = [
 	},
 ]
 ```
+
+--- 
 
 <h3> Default configuration </h3>
 
@@ -131,7 +133,14 @@ export class Customer extends MedusaCustomer {
 }
 ```
 
-Don't to create the migration for this model :
+> If you don't want to expose the field to the API response, you can also add the `select` option in the `Column` decorator.
+> ```ts
+> @Column({ type: 'text', select: false })
+> otp_secret: string
+> ```
+
+
+**Don't forget to create the migration for this model and add the module augmentation for the Customer type :**
 
 ```ts
 import { MigrationInterface, QueryRunner } from 'typeorm'
@@ -147,21 +156,33 @@ export class AddOtpSecretToCustomer1719843922955 implements MigrationInterface {
 }
 ```
 
+**Module augmentation**
+```ts
+// src/index.d.ts
+
+declare module '@medusajs/medusa/dist/models/customer' {
+	interface Customer {
+		otp_secret?: string
+	}
+}
+```
+
+> The module augmentation is necessary to tell TypeScript that the Customer model has a new field called <code>otp_secret</code>.
+> Which will allows you to get the `otp_secret` field everywhere the `Customer` type is used.
+
+
 <h3>2. Generating a secret</h3>
 
 <p>
-When a Customer is created, we need to generate a random secret and save it in the <code>otp_secret</code> field.
+When a new Customer is created, we need to generate a random secret and save it in the <code>otp_secret</code> field.
 </p>
 <p>For this, we're going to register a <code>Subscriber</code> for the <code>CustomerService.Events.CREATED</code> event.</p>
 
 ```ts
 // src/subscribers/customer-created.ts
 
-import { Logger, SubscriberArgs, SubscriberConfig } from '@medusajs/medusa'
+import type { Logger, SubscriberArgs, SubscriberConfig, CustomerService } from '@medusajs/medusa'
 import type { TOTPService } from '@perseidesjs/medusa-plugin-otp'
-import { EntityManager } from 'typeorm'
-
-import CustomerService from '../services/customer'
 
 type CustomerCreatedEventData = {
 	id: string // Customer ID
@@ -214,20 +235,20 @@ import {
 	StorePostAuthReq,
 	defaultStoreCustomersFields,
 	validator,
+  type CustomerService,
 	type AuthService,
 	type MedusaRequest,
 	type MedusaResponse,
 } from '@medusajs/medusa'
 import { defaultRelations } from '@medusajs/medusa/dist/api/routes/store/auth'
 import type { TOTPService } from '@perseidesjs/medusa-plugin-otp'
-import { EntityManager } from 'typeorm'
-import CustomerService from '../../../services/customer'
+import type { EntityManager } from 'typeorm'
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
 	const validated = await validator(StorePostAuthReq, req.body)
 
-	const authService: AuthService = req.scope.resolve('authService')
-	const manager: EntityManager = req.scope.resolve('manager')
+	const authService = req.scope.resolve<AuthService>('authService')
+	const manager = req.scope.resolve<EntityManager>('manager')
 
 	const result = await manager.transaction(async (transactionManager) => {
 		return await authService
@@ -240,8 +261,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 		return
 	}
 
-	const customerService: CustomerService = req.scope.resolve('customerService')
-	const totpService: TOTPService = req.scope.resolve('totpService')
+	const customerService = req.scope.resolve<CustomerService>('customerService')
+	const totpService = req.scope.resolve<TOTPService>('totpService')
 
 	const customer = await customerService.retrieve(result.customer?.id || '', {
 		relations: defaultRelations,
@@ -250,23 +271,26 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
 	const otp = await totpService.generate(customer.id, customer.otp_secret)
 
-	const { otp_secret, ...rest } = customer // We omit the otp_secret from the response, you can also handle this in the CustomerService
+	const { otp_secret, ...rest } = customer // We omit the otp_secret from the response
 
 	res.json({ customer: rest })
 }
 ```
 
-<p> Now whenever a customer logs in, it will no more register a connect_sid cookie, instead, it will generate a new OTP.</p>
+<p> Now whenever a customer logs in, it will no more register a session cookie, instead, it will generate a new OTP.</p>
 
 <h3>4. Subscribing to the event</h3>
 <p> You can subscribe to the event <code>TOTPService.Events.GENERATED</code> to be notified when a new OTP is generated, the key used here for example is the customer ID :</p>
 
 ```ts
 // src/subscribers/otp-generated.ts
-import type { Logger, SubscriberArgs, SubscriberConfig } from "@medusajs/medusa";
-import { TOTPService } from "@perseidesjs/medusa-plugin-otp";
+import type { Logger, SubscriberArgs, SubscriberConfig, CustomerService } from "@medusajs/medusa";
+import type { TOTPService } from "@perseidesjs/medusa-plugin-otp";
 
-import type CustomerService from "../services/customer";
+type OTPGeneratedEventData = {
+    key: string // Customer ID
+    otp: string // The OTP generated
+}
 
 /**
  * Send the OTP to the customer whenever the TOTP is generated.
@@ -274,20 +298,16 @@ import type CustomerService from "../services/customer";
 export default async function sendTOTPToCustomerHandler({
     data,
     container
-}: SubscriberArgs<{ key: string }>) { // The key here is the customer ID
+}: SubscriberArgs<OTPGeneratedEventData>) { // The key here is the customer ID
     const logger = container.resolve<Logger>("logger")
 
     const customerService = container.resolve<CustomerService>("customerService")
 
-    const customer = await customerService.retrieve(data.key).catch((e) => {
-        // In case you are using multiple OTP, if it fails it means the key is invalid / not a customer ID
-        logger.failure(activityId, `An error occured while retrieving the customer with ID : ${data.key}!`)
-        throw e
-    })
+    const customer = await customerService.retrieve(data.key)
 
     const activityId = logger.activity(`Sending OTP to customer with ID : ${customer.id}`)
 
-    // Use your NotificationService here to send the OTP to the customer (e.g. SendGrid)
+    // Use your NotificationService here to send the `data.otp` to the customer (e.g. SendGrid, SMS...)
 
     logger.success(activityId, `Successfully sent OTP to customer with ID : ${customer.id}!`)
 }
@@ -300,7 +320,7 @@ export const config: SubscriberConfig = {
 }
 ```
 
-<p>Your customer will now receive an OTP in their email, let's see how to verify it once it's consumed by your customer.</p> 
+<p>Your customer will now receive an OTP, let's see how to verify it once it's consumed by your customer.</p> 
 
 <h3>5. Verifying the OTP</h3>
 <p>
@@ -310,11 +330,10 @@ We're now going to create a new route to verify the OTP, this route will be call
 ```ts
 // src/api/store/auth/otp/route.ts
 
-import { validator, type MedusaRequest, type MedusaResponse } from "@medusajs/medusa";
+import { validator, type MedusaRequest, type MedusaResponse, type CustomerService } from "@medusajs/medusa";
 import { IsEmail, IsString, MaxLength, MinLength } from "class-validator";
 
 import type { TOTPService } from "@perseidesjs/medusa-plugin-otp";
-import type CustomerService from "../../../../services/customer";
 
 export async function POST(
   req: MedusaRequest,
@@ -349,11 +368,15 @@ class StoreVerifyOTP {
   email: string;
 }
 ```
-<p>Your customer is now authenticated, and the connect_sid cookie is set on the response.</p>
+<p>Your customer is now authenticated, and the `connect_sid` cookie is set on the response.</p>
 
 
 <h2> More information </h2>
 <p> You can find the <code>TOTPService</code> class in the <a href="https://github.com/perseidesjs/medusa-plugin-otp/blob/main/src/services/totp.ts">src/services/totp.ts</a> file.</p>
+
+<h2>Need Help?</h2>
+<p>If you encounter any issues or have any questions, please do not hesitate to open a new issue on our <a href="https://github.com/perseidesjs/medusa-plugin-otp/issues">GitHub repository</a>. We're here to help!</p>
+
 
 <h2>License</h2>
 <p> This project is licensed under the MIT License - see the <a href="./LICENSE.md">LICENSE</a> file for details</p>
