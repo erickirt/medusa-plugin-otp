@@ -63,7 +63,7 @@ const plugins = [
 	`medusa-fulfillment-manual`,
 	`medusa-payment-manual`,
 	{
-		resolve: `@perseidesjs/medusa-otp`,
+		resolve: `@perseidesjs/medusa-plugin-otp`,
 		/** @type {import('@perseidesjs/medusa-plugin-otp').PluginOptions} */
 		options: {
 			ttl: 30, // In seconds, the time to live of the OTP before expiration
