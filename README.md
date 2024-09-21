@@ -25,6 +25,17 @@
  A Medusa's plugin for implementing OTP on Medusa v1.x.x
 </p>
 
+<p align="center">
+  <img src="./.r/preview.gif" alt="Plugin Preview">
+</p>
+
+<blockquote>
+  <p>
+	Here's a quick preview of the plugin in action allowing you to authenticate your customers using OTP and without the need of a password.
+  </p>
+</blockquote>
+
+
 <h2>
   Installation
 </h2>
