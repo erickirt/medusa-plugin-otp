@@ -360,8 +360,8 @@ import { IsString, IsOptional } from 'class-validator'
 
 class StorePostAuthReq extends MedusaStorePostAuthReq {
 	@IsString()
-	@IsOptional()
-	password?: never // ℹ️ We don't want the password field to be required
+	@IsOptional() // ℹ️ Since we can't remove a field on the original validator, we make it optional
+	password: string 
 }
 
 registerOverriddenValidators(StorePostAuthReq)
