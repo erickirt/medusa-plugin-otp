@@ -309,40 +309,63 @@ import type { TOTPService } from '@perseidesjs/medusa-plugin-otp'
 import type { EntityManager } from 'typeorm'
 
 import type { CustomerService } from '../../../services/customer'
+
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
 	const validated = await validator(StorePostAuthReq, req.body)
 
-	const authService = req.scope.resolve<AuthService>('authService')
-	const manager = req.scope.resolve<EntityManager>('manager')
+	const authService: AuthService = req.scope.resolve('authService')
+	const manager: EntityManager = req.scope.resolve('manager')
 
 	const result = await manager.transaction(async (transactionManager) => {
 		return await authService
 			.withTransaction(transactionManager)
-			.authenticateCustomer(validated.email, validated.password)
+			.authenticateCustomerOTP(validated.email)
 	})
 
 	if (!result.success) {
-		res.sendStatus(401)
+		// ℹ️ We don't want to leak information about the email being invalid
+		res.status(200).json({
+			message: 'If the email is valid, you will receive an OTP to your email.',
+		})
 		return
 	}
 
-	const customerService = req.scope.resolve<CustomerService>('customerService')
-	const totpService = req.scope.resolve<TOTPService>('totpService')
+	const customerService: CustomerService = req.scope.resolve('customerService')
+	const totpService: TOTPService = req.scope.resolve('totpService')
 
 	const customer = await customerService.retrieve(result.customer?.id || '', {
 		relations: defaultRelations,
 		select: [...defaultStoreCustomersFields, 'otp_secret'],
 	})
 
-	const otp = await totpService.generate(customer.id, customer.otp_secret)
+	await totpService.generate(customer.id, customer.otp_secret)
 
-	const { otp_secret, ...rest } = customer // We omit the otp_secret from the response
-
-	res.json({ customer: rest })
+	res.status(200).json({
+		message: 'If the email is valid, you will receive an OTP to your email.',
+	})
 }
 ```
-
 <p> Now whenever a customer logs in, it will no more register a session cookie, instead, it will generate a new OTP.</p>
+<p> Before we move on, the current route needs an email and a password, we're going to change that, to make sure we only need an email.</p>
+
+<h4>3.1. Override the `StorePostAuthReq` validator to remove the password field</h4>
+
+```ts
+// src/api/index.ts
+
+import { registerOverriddenValidators, StorePostAuthReq as MedusaStorePostAuthReq } from '@medusajs/medusa'
+import { IsString, IsOptional } from 'class-validator'
+
+class StorePostAuthReq extends MedusaStorePostAuthReq {
+	@IsString()
+	@IsOptional()
+	password?: never // ℹ️ We don't want the password field to be required
+}
+
+registerOverriddenValidators(StorePostAuthReq)
+```
+
+
 
 <h3>4. Subscribing to the event</h3>
 <p> You can subscribe to the event <code>TOTPService.Events.GENERATED</code> to be notified when a new OTP is generated, the key used here for example is the customer ID :</p>
