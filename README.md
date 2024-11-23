@@ -350,6 +350,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
 <h4>3.1. Override the `StorePostAuthReq` validator to remove the password field</h4>
 
+<p> We'll start by creating a new file in the `src/api` directory to override the `StorePostAuthReq` validator.</p>
+
 ```ts
 // src/api/index.ts
 
